@@ -70,10 +70,43 @@ class ColorLite5A75E_V6_0_Platform(LatticeECP5Platform):
             Subsignal("oe", Pins("M4", dir="o"), lvcmos)),
         Resource(
             "eth_common", 0,
-            Subsignal("reset", PinsN("R6", dir="o"), lvcmos)),
+            Subsignal("mdc", Pins("R5", dir="o"), lvcmos),
+            Subsignal("mdio", Pins("T4", dir="io"), lvcmos),
+            Subsignal("rst", PinsN("R6", dir="o"), lvcmos)),
+        Resource(
+            "phy", 0,
+            Subsignal("txc", Pins("L1", dir="o"), lvcmos),
+            Subsignal("txd", Pins("M2 M1 P1 R1", dir="o"), lvcmos),
+            Subsignal("txctl", Pins("L2", dir="o"), lvcmos),
+            Subsignal("rxc", Pins("J1", dir="i"), lvcmos),
+            Subsignal("rxd", Pins("J3 K2 K1 K3", dir="i"), lvcmos),
+            Subsignal("rxctl", Pins("J2", dir="i"), lvcmos)),
+        Resource(
+            "phy", 1,
+            Subsignal("txc", Pins("J16", dir="o"), lvcmos),
+            Subsignal("txd", Pins("K16 J15 J14 K15", dir="o"), lvcmos),
+            Subsignal("txctl", Pins("K14", dir="o"), lvcmos),
+            Subsignal("rxc", Pins("M16", dir="i"), lvcmos),
+            Subsignal("rxd", Pins("M15 R16 L15 L16", dir="i"), lvcmos),
+            Subsignal("rxctl", Pins("P16", dir="i"), lvcmos)),
+        Resource(
+            "sdram", 0,
+            Subsignal("we", PinsN("B5", dir="o"), lvcmos),
+            Subsignal("cas", PinsN("A6", dir="o"), lvcmos),
+            Subsignal("ras", PinsN("B6", dir="o"), lvcmos),
+            Subsignal("ba", Pins("B7 A8", dir="o"), lvcmos),
+            Subsignal("a", Pins("A9 B9 B10 C10 D9 C9 E9 D8 E8 C7 B8", dir="o"),
+                      lvcmos),
+            Subsignal("d",
+                      Pins("D5 C5 E5 C6 D6 E6 D7 E7 D10 C11 D11 C12 E10 C13 "
+                           "D13 E11 A5 B4 A4 B3 A3 C3 A2 B2 D14 B14 A14 B13 "
+                           "A13 B12 B11 A11", dir="io"),
+                      lvcmos),
+            Subsignal("clk", Pins("C8", dir="o"), lvcmos)),
     ]
     connectors = []
 
+    # Used by __init__ to create each individual LED pin header
     leds = [
         # R0, G0, B0, R1, G1, B1
         ['C4', 'D4', 'E4', 'D3', 'E3', 'F4'],           # J1
@@ -95,22 +128,14 @@ class ColorLite5A75E_V6_0_Platform(LatticeECP5Platform):
     ]
 
     # Currently unknown inputs/outputs/bidirectional
-    inputs = [
-        'A10', 'A12', 'J1', 'J2', 'J3', 'K1', 'K2', 'K3', 'L15', 'L16', 'M15',
-        'M16', 'P16', 'R16']
-    outputs = [
-        'A6', 'A7', 'A8', 'A9', 'A15', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10',
-        'C7', 'C8', 'C9', 'C10', 'D8', 'D9', 'E8', 'E9', 'E12', 'E13', 'J14',
-        'J15', 'J16', 'K12', 'K14', 'K15', 'K16', 'L1', 'L2', 'M1', 'M2', 'M6',
-        'M12', 'P1', 'R1', 'R5']
-    bidis = [
-        'A2', 'A3', 'A4', 'A5', 'A11', 'A13', 'A14', 'B2', 'B3', 'B4', 'B11',
-        'B12', 'B13', 'B14', 'C3', 'C5', 'C6', 'C11', 'C12', 'C13', 'D5', 'D6',
-        'D7', 'D10', 'D11', 'D12', 'D13', 'D14', 'E5', 'E6', 'E7', 'E10',
-        'E11', 'T4']
+    inputs = ['A10', 'A12']
+    outputs = ['A7', 'A15', 'E12', 'E13', 'K12', 'M6', 'M12']
+    bidis = ['D12']
 
     def __init__(self):
         lvcmos = self.lvcmos
+
+        # Create resources for each LED header
         for jidx, pins in enumerate(self.leds):
             self.resources += [Resource(
                 "led_rgb", jidx,
@@ -120,6 +145,8 @@ class ColorLite5A75E_V6_0_Platform(LatticeECP5Platform):
                 Subsignal("r1", Pins(pins[3], dir="o"), lvcmos),
                 Subsignal("g1", Pins(pins[4], dir="o"), lvcmos),
                 Subsignal("b1", Pins(pins[5], dir="o"), lvcmos))]
+
+        # Create resources for each unknown pin
         for pin in self.outputs:
             self.resources += [Resource(pin, 0, Pins(pin, dir="o"), lvcmos)]
         for pin in self.inputs:
@@ -139,7 +166,11 @@ class Top(nm.Elaboratable):
         m.submodules.oscg = nm.Instance("OSCG", p_DIV=12, o_OSC=cd_osc.clk)
 
         # Hold PHYs in reset
-        m.d.comb += platform.request("eth_common").reset.eq(1)
+        m.d.comb += platform.request("eth_common").rst.eq(1)
+
+        # Hold SDRAM in WE to prevent it driving DQ and leave clock low.
+        sdram = platform.request("sdram")
+        m.d.comb += sdram.we.eq(1), sdram.clk.eq(0)
 
         # Flash LED
         led = platform.request("led")
@@ -147,7 +178,7 @@ class Top(nm.Elaboratable):
         m.d.sync += ctr.eq(ctr + 1)
         m.d.comb += led.o.eq(ctr[-1])
 
-        # UART on outputs
+        # UART on unknown outputs
         v = nm.Signal()
         p = nm.Signal()
         m.d.sync += p.eq(ctr[-4]), v.eq(p != ctr[-4])
@@ -155,7 +186,8 @@ class Top(nm.Elaboratable):
             print(f"{idx:02X} {pin}")
             uart = UART(idx)
             m.submodules += uart
-            m.d.comb += platform.request(pin).o.eq(uart.tx_o), uart.valid.eq(v)
+            pin = platform.request(pin)
+            m.d.comb += pin.o.eq(uart.tx_o), uart.valid.eq(v)
 
         return m
 
