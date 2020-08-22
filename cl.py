@@ -120,7 +120,7 @@ class ColorLite5A75E_V6_0_Platform(LatticeECP5Platform):
         ['P11', 'N11', 'M11', 'T13', 'R12', 'R13'],     # J9
         ['R14', 'T14', 'D16', 'C15', 'C16', 'B16'],     # J10
         ['B15', 'C14', 'T15', 'P15', 'R15', 'P12'],     # J11
-        ['P13', 'N12', 'N13', 'M13', 'P14', 'N14'],     # J12
+        ['P13', 'N12', 'N13', 'M12', 'P14', 'N14'],     # J12
         ['H15', 'H14', 'G16', 'F16', 'G15', 'F15'],     # J13
         ['E15', 'E16', 'L12', 'L13', 'M14', 'L14'],     # J14
         ['J13', 'K13', 'J12', 'H13', 'H12', 'G12'],     # J15
@@ -129,7 +129,7 @@ class ColorLite5A75E_V6_0_Platform(LatticeECP5Platform):
 
     # Currently unknown inputs/outputs/bidirectional
     inputs = ['A10', 'A12']
-    outputs = ['A7', 'A15', 'E12', 'E13', 'K12', 'M6', 'M12']
+    outputs = ['A7', 'A15', 'E12', 'E13', 'K12', 'M6', 'M13']
     bidis = ['D12']
 
     def __init__(self):
