@@ -144,19 +144,14 @@ def main():
         pinpio = iodb[pin]['pio']
         io = None
         if pinrow == 0:
-            # Top pin, look at PIOT0, PIOT1, PICT0, PICT1
             io = top_pin(tiles, pinrow, pincol, pinpio)
         elif pinrow == max_row:
-            # Bottom pin, look at PICB0, PICB1
             io = btm_pin(tiles, pinrow, pincol, pinpio)
         elif pincol == 0:
-            # Left pin, look at PICL0/1/2
             io = left_pin(tiles, pinrow, pincol, pinpio)
         elif pincol == max_col:
-            # Right pin, look at PICR0/1/2
             io = right_pin(tiles, pinrow, pincol, pinpio)
         else:
-            # Unhandled
             raise RuntimeError(f"Unhandled pin location {pin}")
 
         if io:
