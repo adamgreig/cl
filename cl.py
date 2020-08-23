@@ -43,6 +43,117 @@ class UART(nm.Elaboratable):
         return m
 
 
+class Mem2Parallel(nm.Elaboratable):
+    """
+    When triggered on dv, clocks out n words from the start of read_port.
+    """
+    def __init__(self, read_port, div=5):
+        # Inputs
+        self.dv = nm.Signal()
+        self.n = nm.Signal(read_port.addr.width)
+
+        # Outputs
+        self.o = nm.Signal(read_port.data.width)
+        self.clk = nm.Signal()
+        self.ready = nm.Signal()
+
+        self.read_port = read_port
+        self.div = div
+
+    def elaborate(self, platform):
+        m = nm.Module()
+
+        n = nm.Signal(self.n.width)
+        addr = self.read_port.addr
+        ctr = nm.Signal(range(self.div))
+
+        with m.FSM():
+            with m.State("IDLE"):
+                m.d.sync += n.eq(self.n), addr.eq(0)
+                m.d.sync += self.o.eq(0)
+                with m.If(self.dv):
+                    m.next = "DATA"
+            with m.State("DATA"):
+                m.d.sync += ctr.eq(self.div - 2)
+                m.d.sync += addr.eq(addr + 1)
+                m.d.sync += self.o.eq(self.read_port.data)
+                m.d.sync += self.clk.eq(0)
+                m.next = "WAIT"
+            with m.State("WAIT"):
+                m.d.sync += ctr.eq(ctr - 1)
+                m.d.sync += self.clk.eq(1)
+                with m.If(ctr == 0):
+                    with m.If(addr == n):
+                        m.next = "IDLE"
+                    with m.Else():
+                        m.next = "DATA"
+        return m
+
+
+class RGMIIRx(nm.Elaboratable):
+    def __init__(self, write_port):
+        # Inputs
+        self.rxd = nm.Signal(8)
+        self.rxctl = nm.Signal(2)
+
+        # Outputs
+        self.dv = nm.Signal()
+        self.n = nm.Signal(11)
+
+        self.wp = write_port
+
+    def elaborate(self, platform):
+        m = nm.Module()
+
+        n = nm.Signal(11)
+        rxdv = self.rxctl[0]
+
+        m.d.sync += self.wp.addr.eq(n)
+        m.d.sync += self.wp.data.eq(self.rxd)
+
+        with m.FSM():
+            with m.State("IDLE"):
+                m.d.comb += self.wp.en.eq(0)
+                m.d.sync += self.dv.eq(0), self.n.eq(0)
+                with m.If(rxdv):
+                    m.d.sync += n.eq(1)
+                    m.next = "DATA"
+                with m.Else():
+                    m.d.sync += n.eq(0)
+            with m.State("DATA"):
+                m.d.comb += self.wp.en.eq(1)
+                m.d.sync += n.eq(n + 1)
+                with m.If(~rxdv):
+                    m.d.sync += self.dv.eq(1), self.n.eq(n), n.eq(0)
+                    m.next = "IDLE"
+
+        return m
+
+
+def test_mem_to_parallel():
+    from nmigen.sim import pysim
+    m = nm.Module()
+    mem = nm.Memory(width=8, depth=64, init=b"Hello World! Ignore this.")
+    m.submodules.rp = rp = mem.read_port()
+    m.submodules.tx = tx = Mem2Parallel(rp)
+
+    def tb():
+        yield
+        yield tx.n.eq(12)
+        yield tx.dv.eq(1)
+        yield
+        yield tx.n.eq(0)
+        yield tx.dv.eq(0)
+        for _ in range(70):
+            yield
+
+    sim = pysim.Simulator(m)
+    sim.add_clock(1/125e6)
+    sim.add_sync_process(tb)
+    with sim.write_vcd("mem2parallel.vcd"):
+        sim.run()
+
+
 class ColorLite5A75E_V6_0_Platform(LatticeECP5Platform):
     device = "LFE5U-25F"
     package = "BG256"
@@ -78,7 +189,7 @@ class ColorLite5A75E_V6_0_Platform(LatticeECP5Platform):
             Subsignal("txc", Pins("L1", dir="o"), lvcmos),
             Subsignal("txd", Pins("M2 M1 P1 R1", dir="o"), lvcmos),
             Subsignal("txctl", Pins("L2", dir="o"), lvcmos),
-            Subsignal("rxc", Pins("J1", dir="i"), lvcmos),
+            Subsignal("rxc", Pins("J1", dir="i"), Clock(125e6), lvcmos),
             Subsignal("rxd", Pins("J3 K2 K1 K3", dir="i"), lvcmos),
             Subsignal("rxctl", Pins("J2", dir="i"), lvcmos)),
         Resource(
@@ -86,7 +197,7 @@ class ColorLite5A75E_V6_0_Platform(LatticeECP5Platform):
             Subsignal("txc", Pins("J16", dir="o"), lvcmos),
             Subsignal("txd", Pins("K16 J15 J14 K15", dir="o"), lvcmos),
             Subsignal("txctl", Pins("K14", dir="o"), lvcmos),
-            Subsignal("rxc", Pins("M16", dir="i"), lvcmos),
+            Subsignal("rxc", Pins("M16", dir="i"), Clock(125e6), lvcmos),
             Subsignal("rxd", Pins("M15 R16 L15 L16", dir="i"), lvcmos),
             Subsignal("rxctl", Pins("P16", dir="i"), lvcmos)),
         Resource(
@@ -165,20 +276,49 @@ class Top(nm.Elaboratable):
         m.domains.sync = cd_osc = nm.ClockDomain("sync")
         m.submodules.oscg = nm.Instance("OSCG", p_DIV=12, o_OSC=cd_osc.clk)
 
-        # Hold PHYs in reset
-        m.d.comb += platform.request("eth_common").rst.eq(1)
-
-        # Hold SDRAM in WE to prevent it driving DQ and leave clock low.
-        sdram = platform.request("sdram")
-        m.d.comb += sdram.we.eq(1), sdram.clk.eq(0)
-
         # Flash LED
         led = platform.request("led")
         ctr = nm.Signal(22)
         m.d.sync += ctr.eq(ctr + 1)
         m.d.comb += led.o.eq(ctr[-1])
 
+        # Hold PHYs in reset
+        """
+        m.d.comb += platform.request("eth_common").rst.eq(1)
+        """
+
+        # Connect to RX of PHY1
+        phy1 = platform.request("phy", 1, xdr={"rxd": 2, "rxctl": 2})
+        m.domains.rxc = cd_rxc = nm.ClockDomain("rxc")
+        m.d.comb += [
+            cd_rxc.clk.eq(phy1.rxc),
+            phy1.rxd.i_clk.eq(~phy1.rxc),
+            phy1.rxctl.i_clk.eq(phy1.rxc),
+        ]
+
+        # Create RGMII receiver
+        dr_rxc = nm.DomainRenamer("rxc")
+        rxmem = nm.Memory(width=8, depth=2048)
+        m.submodules.rx_rp = rx_rp = dr_rxc(rxmem.read_port(transparent=False))
+        m.submodules.rx_wp = rx_wp = dr_rxc(rxmem.write_port())
+        m.submodules.rgmii_rx = rgmii_rx = dr_rxc(RGMIIRx(rx_wp))
+        m.d.comb += [
+            rgmii_rx.rxd.eq(nm.Cat(phy1.rxd.i0, phy1.rxd.i1)),
+            rgmii_rx.rxctl.eq(nm.Cat(phy1.rxctl.i0, phy1.rxctl.i1)),
+        ]
+
+        # Dump received packets over parallel interface
+        m.submodules.m2p = m2p = dr_rxc(Mem2Parallel(rx_rp, div=5))
+        m.d.comb += m2p.n.eq(rgmii_rx.n), m2p.dv.eq(rgmii_rx.dv)
+        led_j7 = platform.request("led_rgb", 6)
+        led_j8 = platform.request("led_rgb", 7)
+        m.d.comb += nm.Cat(
+            led_j8.r0.o, led_j8.g0.o, led_j8.b0.o, led_j8.r1.o,
+            led_j7.r0.o, led_j7.g0.o, led_j7.b0.o, led_j7.r1.o).eq(m2p.o)
+        m.d.comb += led_j7.g1.o.eq(m2p.clk)
+
         # UART on unknown outputs
+        """
         v = nm.Signal()
         p = nm.Signal()
         m.d.sync += p.eq(ctr[-4]), v.eq(p != ctr[-4])
@@ -188,6 +328,7 @@ class Top(nm.Elaboratable):
             m.submodules += uart
             pin = platform.request(pin)
             m.d.comb += pin.o.eq(uart.tx_o), uart.valid.eq(v)
+        """
 
         return m
 
